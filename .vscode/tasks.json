@@ -4,7 +4,7 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "g++ -g x.c -o x",
+            "command": "gcc -g speller.c -o speller",
             "group": {
                 "kind": "build",
                 "isDefault": true

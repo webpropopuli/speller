@@ -1,0 +1,5 @@
+/keys
+/dictionaries
+/texts
+*.o
+*.exe
