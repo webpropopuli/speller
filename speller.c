@@ -2,23 +2,52 @@
 
 #include <ctype.h>
 #include <stdio.h>
-#include <sys/resource.h>
+//!  #include <sys/resource.h> // does not exist in Windows distro
+
+#define __USE_BSD
+#define _BSD_SOURCE
+#define _DEFAULT_SOURCE
 #include <sys/time.h>
+#ifndef timersub
+#define timersub(a, b, result) \
+        do { \
+                (result)->tv_sec = (a)->tv_sec - (b)->tv_sec; \
+                (result)->tv_usec = (a)->tv_usec - (b)->tv_usec; \
+                if ((result)->tv_usec < 0) { \
+                        --(result)->tv_sec; \
+                        (result)->tv_usec += 1000000; \
+                } \
+        } while (0)
+#endif // timersub
+
+#ifndef timeradd
+#define timeradd(_a, _b, _res) \
+  do { \
+    (_res)->tv_usec = (_a)->tv_usec + (_b)->tv_usec; \
+    (_res)->tv_sec = (_a)->tv_sec + (_b)->tv_sec; \
+    if ((_res)->tv_usec >= 1000000) \
+      { \
+        (_res)->tv_usec -= 1000000; \
+        (_res)->tv_sec++; \
+      } \
+  } while (0)
+#endif
+
+#include <assert.h>
+#include <math.h>
 
 #include "dictionary.h"
-
-// Undefine any definitions
-#undef calculate
-#undef getrusage
 
 // Default dictionary
 #define DICTIONARY "dictionaries/large"
 
-// Prototype
-double calculate(const struct rusage *b, const struct rusage *a);
 
 int main(int argc, char *argv[])
 {
+struct timeval start2;
+struct timeval  end2;
+
+
     // Check for correct number of args
     if (argc != 2 && argc != 3)
     {
@@ -26,29 +55,28 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Structures for timing data
-    struct rusage before, after;
-
     // Benchmarks
-    double time_load = 0.0, time_check = 0.0, time_size = 0.0, time_unload = 0.0;
+    struct timeval time_load, time_size, time_check, time_unload;
+    struct timeval time_check_total;
+    timerclear(&time_check_total);
 
     // Determine dictionary to use
     char *dictionary = (argc == 3) ? argv[1] : DICTIONARY;
 
     // Load dictionary
-    getrusage(RUSAGE_SELF, &before);
-    bool loaded = load(dictionary);
-    getrusage(RUSAGE_SELF, &after);
 
+    gettimeofday(&start2, NULL);
+    bool loaded = load(dictionary);
+    gettimeofday(&end2, NULL);
+    timersub(&end2, &start2, &time_load);
+
+    
     // Exit if dictionary not loaded
     if (!loaded)
     {
         printf("Could not load %s.\n", dictionary);
         return 1;
     }
-
-    // Calculate time to load dictionary
-    time_load = calculate(&before, &after);
 
     // Try to open text
     char *text = (argc == 3) ? argv[2] : argv[1];
@@ -108,17 +136,18 @@ int main(int argc, char *argv[])
             words++;
 
             // Check word's spelling
-            getrusage(RUSAGE_SELF, &before);
+            gettimeofday(&start2, NULL);
             bool misspelled = !check(word);
-            getrusage(RUSAGE_SELF, &after);
-
-            // Update benchmark
-            time_check += calculate(&before, &after);
+            gettimeofday(&end2, NULL);
+            timersub(&end2, &start2, &time_check);
+            // Update benchmark total time
+            timeradd(&time_check_total, &time_check, &time_check_total);
+            
 
             // Print word if misspelled
             if (misspelled)
             {
-                printf("%s\n", word);
+                //printf("%s\n", word);
                 misspellings++;
             }
 
@@ -140,17 +169,16 @@ int main(int argc, char *argv[])
     fclose(file);
 
     // Determine dictionary's size
-    getrusage(RUSAGE_SELF, &before);
+    gettimeofday(&start2, NULL);
     unsigned int n = size();
-    getrusage(RUSAGE_SELF, &after);
-
-    // Calculate time to determine dictionary's size
-    time_size = calculate(&before, &after);
+    gettimeofday(&end2, NULL);
+    timersub(&end2, &start2, &time_size);
 
     // Unload dictionary
-    getrusage(RUSAGE_SELF, &before);
+    gettimeofday(&start2, NULL);
     bool unloaded = unload();
-    getrusage(RUSAGE_SELF, &after);
+    gettimeofday(&end2, NULL);
+    timersub(&end2, &start2, &time_unload);
 
     // Abort if dictionary not unloaded
     if (!unloaded)
@@ -159,37 +187,21 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Calculate time to unload dictionary
-    time_unload = calculate(&before, &after);
-
     // Report benchmarks
-    printf("\nWORDS MISSPELLED:     %d\n", misspellings);
+    printf("\nWORDS MISSPELLED:   %d\n", misspellings);
     printf("WORDS IN DICTIONARY:  %d\n", n);
     printf("WORDS IN TEXT:        %d\n", words);
-    printf("TIME IN load:         %.2f\n", time_load);
-    printf("TIME IN check:        %.2f\n", time_check);
-    printf("TIME IN size:         %.2f\n", time_size);
-    printf("TIME IN unload:       %.2f\n", time_unload);
-    printf("TIME IN TOTAL:        %.2f\n\n",
-           time_load + time_check + time_size + time_unload);
+    printf("TIME IN load:         %ld.%06ld s\n",  time_load.tv_sec, time_load.tv_usec);
+    printf("TIME IN check:        %ld.%06ld s\n",  time_check_total.tv_sec, time_check_total.tv_usec);
+    printf("TIME IN size:         %ld.%06ld s\n",  time_size.tv_sec, time_size.tv_usec);
+    printf("TIME IN unload:       %ld.%06ld s\n",  time_unload.tv_sec, time_unload.tv_usec);
+    
+    timeradd(&time_check_total, &time_load, &time_check_total);
+    timeradd(&time_check_total, &time_size, &time_check_total);
+    timeradd(&time_check_total, &time_unload, &time_check_total);
+    printf("TIME IN TOTAL:        %ld.%06ld s\n", time_check_total.tv_sec, time_check_total.tv_usec);
 
     // Success
     return 0;
 }
 
-// Returns number of seconds between b and a
-double calculate(const struct rusage *b, const struct rusage *a)
-{
-    if (b == NULL || a == NULL)
-    {
-        return 0.0;
-    }
-    else
-    {
-        return ((((a->ru_utime.tv_sec * 1000000 + a->ru_utime.tv_usec) -
-                  (b->ru_utime.tv_sec * 1000000 + b->ru_utime.tv_usec)) +
-                 ((a->ru_stime.tv_sec * 1000000 + a->ru_stime.tv_usec) -
-                  (b->ru_stime.tv_sec * 1000000 + b->ru_stime.tv_usec)))
-                / 1000000.0);
-    }
-}

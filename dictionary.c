@@ -17,57 +17,45 @@ typedef struct _DICT {
 } DICT;
 
 typedef struct _NODE {
-    char *pWord;
+    char *addr;
     struct _NODE *next;
 } NODE;
 
 typedef struct _HEAD {  // Head pointers for hash array
-    //int cnt;
     NODE *pNode;
+    int hasData;        // will be 0 until first use
 } HEAD;
 
-typedef int hkey;
+typedef unsigned hkey;
 
 #define LOG printf ("fn:%s() ln:%d in %s\t",\
                       __func__, __LINE__, __FILE__);
 
 #define WAIT {puts("<any key>"); getchar();}
-
-#define HASHSIZE 200000 //143477 105557   // size of hash table. This is a prime for mathy reasons beyond the
-                        // scope of this problem and my brain. 7919 is the 1000th prime fwiw.
+//2^16	65536
+//2^17	131072
+//2^18	262144
+#define HASHSIZE 262144 // 143477, 105557   // size of hash table. This is a prime for mathy reasons beyond the scope of this problem and my brain
+#define HASHMASK 262143                    // turn all bit on 1 less than HASHSIZE (which MUST BE A Power of 2)
 
 DICT dict;              // The Dictionary we build
 
 HEAD HASH[HASHSIZE];    // The Hash Table we use. An array of singly linked lists
 
-
-/*****
- * *                    InitHashTable()
- * * */
-void InitHashtable(void)
+// some crappy hash fn found on interwebs. This is secondary though an optimal fn is sorta important
+inline static unsigned int GetHashKey(const char* word)
 {
-    HEAD *p = &HASH[0];
+register unsigned long hash = 0;
+register int c;
 
-    for(int x=0; x<HASHSIZE; x++)
-    {
-        p->pNode = NULL;
-        //p->cnt = 0;
-    }
-}
+        while ((c = *word++))
+            hash = c + (hash << 6) + (hash << 16) - hash;
 
-// The Hash func
-hkey GetHashKey(const char* word)
-{
-   unsigned int length = strlen(word);
-   unsigned int hash = 1315423911;
-   unsigned int i    = 0;
-
-  for (i = 0; i < length; ++word, ++i)
-  {
-     hash ^= ((hash << 5) + (*word) + (hash >> 2));
-  }
-
-    return (hkey)(hash % HASHSIZE);
+#if 0
+    return (hash % HASHSIZE);
+#else
+    return (hash & HASHMASK); // this should be faster though smart compiler prolly means irrelevant
+#endif
 }
 
 
@@ -83,45 +71,13 @@ NODE* CreateNode(char *str)
         LOG printf("malloc error in CreateNode()\n");
         return NULL;
     }
-    np->pWord = str;
+    np->addr = str;
     np->next = NULL;
 
     return np;
 }
 
-/***                    LookupNode()
- *find a node
- * return NODE * if found, else NULL
- */
-bool LookupNode(char *s, HEAD *pHEAD)
-{
-    if(pHEAD->pNode == NULL)    // this list is empty
-        return false;
 
-    NODE *np = pHEAD->pNode;
-
-    while(np != NULL)
-        {
-        if (0 == strcmp(s, np->pWord))
-          return true;    /* found */
-        np = np->next;
-        }
-    return false;        /* not found */
-}
-
-
-/***                    InsertNode()
- * Insert node at head
- *  new->next = Head
- *  replace HEAD with new
- */
-bool InsertNode(NODE *pNode, HEAD *pHEAD)
-{
-    pNode->next = pHEAD->pNode;
-    pHEAD->pNode = pNode;
-    //pHEAD->cnt++;
-    return true;
-}
 
 /*****
  * *                    check()
@@ -129,43 +85,37 @@ bool InsertNode(NODE *pNode, HEAD *pHEAD)
 // Returns true if word found in dictionary else false
 bool check(const char *word)
 {
-static char* p;
-static hkey key;
-static HEAD *pHEAD;
-static NODE *np = NULL;
-
-char *tmp = malloc(strlen(word) + 1);
+register char* p;
+register NODE *np;
+static char temp[LENGTH];  // a reusable area to munge the input word to lower
 
 // make a copy and lowercase it
-tmp = malloc(strlen(word)*sizeof(char));
-p = tmp;
+strcpy(temp, word);
+p = temp;
+for (; *p; ++p)
+    //if(*p < 'a')
+        *p |= 32;   // this is a bitmask. Go look at the ascii table...
 
-for (; *p; ++p) *p = tolower(*p);
 
-key = GetHashKey(tmp);
+unsigned int key = GetHashKey(temp);
+//printf("%u|", key);
 
-pHEAD = &HASH[key];
-
-if(pHEAD->pNode == NULL)    //empty
+if( 0 == (&HASH[key])->hasData)     // ...never assigned anything to this row
     return false;
 
-bool bFound = false;
+np = (&HASH[key])->pNode;
 
-np = pHEAD->pNode;
-
-while(np != NULL)
+while(np /*!= NULL*/)    // this list is not empty
     {
-    if (0 == strcmp(tmp, np->pWord))
-        {
-        bFound = true; // found
-        break;
-        }
-    else
-        np = np->next;
+    if(temp[0] == *np->addr)        //hacking strcmp- don't call func it first chars don't match
+        if (0 == strcmp(temp, np->addr))
+            {
+            return true;    // found
+            }
+    np = np->next;
     }
 
-free(tmp);
-return bFound;
+return false;
 }
 
 /*****
@@ -175,8 +125,8 @@ return bFound;
 bool load(const char *dictionary)
 {
 dict.size = 0;
-//InitHashtable();
-memset(HASH, 0, HASHSIZE*sizeof(HEAD));
+
+memset(HASH, 0, HASHSIZE*sizeof(HEAD));  //InitHashtable();
 
 //LOG printf("->Opening dict %s\n", dictionary);
 
@@ -208,10 +158,17 @@ fread(dict.buf, lFileLen, 1, fileDict); /* Read the entire file into DICT */
 
 char *pMem=dict.buf;    // ptr into to DICT text
 char *endMem = dict.buf + lFileLen;  // ptr to end of buffer
+HEAD * pHEAD;
 
 char *strStart;
 do
 {
+    if(!(*pMem))
+    {
+        pMem++;
+        continue;
+    }
+
     strStart = pMem;    // save the begin of str in DICT
 
     // find end of string so we can null term it
@@ -219,20 +176,23 @@ do
     {
          pMem++;
     }
-    *(pMem++) = 0;  // null terminate both
+    *(pMem) = 0;  // null terminate both
+    pMem++;
 
-    hkey key = GetHashKey(strStart);
-    HEAD *pHEAD = &HASH[key];
-
-    // if not in list then create it and update count
-//DJM printf("Found Dict word %s(keyval %d)\n", strStart, (int)key);
-    if(strlen(strStart))
+    /* Create it, insert it and update count
+    */
+    if(*strStart) // not NULL
         {
-        NODE *pNode = CreateNode(strStart);
-        //assert (pNode);
+        unsigned int key = GetHashKey(strStart);
+        pHEAD = &HASH[key];
 
-        if (InsertNode(pNode, pHEAD))
-            dict.size++;
+        NODE *pNode = CreateNode(strStart);
+
+        // INSERT node at HEAD position
+        pNode->next = pHEAD->pNode;     // new->next to current head
+        pHEAD->pNode = pNode;           // then HEAD is the new guy
+        pHEAD->hasData++;
+        dict.size++;
         }
 } while(pMem < endMem);   // while < endBuf
 
@@ -241,36 +201,20 @@ fclose (fileDict);
 
 //LOG printf("load() read %i lines from %s\n", dict.size, dictionary);
 
-/*
-DJM // dump the hash table
-for(int z = 0; z<HASHSIZE; z++)
-{
-    NODE *p = HASH[z].pNode;
-
-    //printf("\nHASH[%d] %d elements\n", z, HASH[z].cnt);
-
-    if(p != NULL)
-        do
-        {
-            printf("\t[%s]", p->pWord);
-            p = p->next;
-        }
-        while (p != NULL);
-}
-DJM WAIT
-*/
 
 return true;
 }
 
 /*****
  * *                    size()
- * * */
-// Returns number of words in dictionary if loaded else 0 if not yet loaded
+ * *
+ * * Returns number of words in dictionary if loaded else 0 if not yet loaded
+ * */
 inline unsigned int size(void)
 {
 return dict.size;
 }
+
 
 
 /*****
@@ -281,24 +225,24 @@ bool unload(void)
 {
 NODE *p, *tmp;
 
-    /* Walk each list and
-            save next,
-            unload current,
-            repeat while ptr != NULL
-    */
+    // Walk each list and unload from the end
     for(int x=0; x<HASHSIZE; x++)
     {
-//DJM printf("Freeing HASH[%d]\t", x);
+    if(HASH[x].hasData == 0)
+        continue;
+    else
+        {
         HEAD *pH = &HASH[x];
 
         p = pH->pNode;
 
         while (NULL != p)
             {
-                tmp = p;
-                p = p->next;
-                free(tmp);
+            tmp = p;
+            p = p->next;
+            free(tmp);
             }
+        }
     }
 
     free(dict.buf);
